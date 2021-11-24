@@ -1,0 +1,10 @@
+{
+"web":{
+        "client_id":"887033162265-2a1n5d2mn4igdclgbbl5klt393kana05.apps.googleusercontent.com",
+        "project_id":"fluted-catalyst-332915",
+        "auth_uri":"https://accounts.google.com/o/oauth2/auth",
+        "token_uri":"https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret":"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"
+    }
+}
