@@ -165,8 +165,11 @@ class google_api:
             either response as a dictonary, or status code if status code != 200
         """
 
-        if self.scopes[scope]["expires_at"] < time():
-            await self.scopes(scope)
+        try:
+            if self.scopes[scope]["expires_at"] < time():
+                await self.auth(scope)
+        except KeyError:
+            await self.auth(scope)
 
         headers = {"Authorization": "Bearer " + self.scopes[scope]["access_token"], **headers}
         async with self.session.get(
