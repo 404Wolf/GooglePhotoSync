@@ -4,8 +4,7 @@ import sys
 import json
 from progress.bar import Bar as bar
 import aiofiles
-from colorama import init 
-init()
+from time import time
 
 # set the event policy to prevent windows bugs
 if sys.platform == "win32":
@@ -22,6 +21,7 @@ async def main():
         None
     """
 
+    start = time()
     client = google()
     await client.auth("photoslibrary.readonly")
     await gather_photo_data(client)
@@ -42,7 +42,7 @@ async def gather_photo_data(client):
     batch = 1
     progress_bar = progress_bar = progress_bar = bar(
         "Working on batch #" + str(batch) + "'s images...",
-        fill="@",
+        fill="#",
         suffix="%(percent).1f%% - %(eta)ds",
     )
 
@@ -63,13 +63,13 @@ async def gather_photo_data(client):
             # progress the progress bar
             progress_bar.next()
             progress_reset_counter += 1
-            if progress_reset_counter == 99:
+            if progress_reset_counter == 100:
                 progress_reset_counter = 0
                 batch += 1
                 print()
                 progress_bar = progress_bar = bar(
                     "Working on batch #" + str(batch) + "'s images...",
-                    fill="@",
+                    fill="#",
                     suffix="%(percent).1f%% - %(eta)ds",
                 )
 
@@ -90,7 +90,7 @@ async def gather_photo_data(client):
                 data = data["mediaItems"]
 
                 # combine previous data with new data
-                data = previous_data + data 
+                data = previous_data + data
 
                 # save previous data
                 previous_data = data
@@ -108,13 +108,14 @@ async def gather_photo_data(client):
         # close aiohttp session
         await client.close_session()
 
-    #disable memory buffering to reduce ram usage
-    with open("output/raw_data.json", "w", 0) as final_data:
-        await final_data.write(json.dumps(output, indent=3))
+    # disable memory buffering to reduce ram usage
+    with open("output/raw_data.json", "w") as final_data:
+        json.dump(output, final_data, indent=3)
 
     # save status of script
     with open("output/current.json", "w") as current_save:
-        await current_save.write(json.dumps({"next_page": next_page}, indent=3))
+        json.dump({"next_page": next_page}, indent=3)
+
 
 # run main script
 asyncio.run(main())
