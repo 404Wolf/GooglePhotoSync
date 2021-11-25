@@ -153,7 +153,7 @@ class google_api:
         # save auth information to json file
         self.dump_auth_file({"scopes": self.scopes, "appdata": self.appdata})
 
-    async def request(self, endpoint, scope):
+    async def request(self, endpoint, scope, params="", headers={}):
         """
         Make a request to a google api endpoint
 
@@ -168,9 +168,9 @@ class google_api:
         if self.scopes[scope]["expires_at"] < time():
             await self.scopes(scope)
 
-        headers = {"Authorization": "Bearer " + self.scopes[scope]["access_token"]}
+        headers = {"Authorization": "Bearer " + self.scopes[scope]["access_token"], **headers}
         async with self.session.get(
-            "https://photoslibrary.googleapis.com/v1/" + endpoint, headers=headers
+            "https://photoslibrary.googleapis.com/v1/" + endpoint, headers=headers, params=params
         ) as resp:
             if resp.status == 200:
                 return await resp.json()
