@@ -1,8 +1,11 @@
+from google import google
 import asyncio
 import sys
-from types import new_class
-from google_api import google_api
 import json
+from progress.bar import Bar as bar
+import aiofiles
+from colorama import init 
+init()
 
 # set the event policy to prevent windows bugs
 if sys.platform == "win32":
@@ -10,20 +13,66 @@ if sys.platform == "win32":
 
 
 async def main():
-    with open("output/current.json") as current_save:
-        next_page = json.load(current_save)["next_page"]
-    with open("output/raw_data.json") as previous_data:
-        previous_data = json.load(previous_data)
-    data = []
+    """
+    Main function async script
 
+    Args:
+        None
+    Returns:
+        None
+    """
+
+    client = google()
+    await client.auth("photoslibrary.readonly")
+    await gather_photo_data(client)
+
+
+async def gather_photo_data(client):
+    """
+    Function to pull data for every single photo, and store it as a json
+
+    Args:
+        client: google_api client object
+    Returns:
+        None
+    """
+
+    # create progress bar
+    progress_reset_counter = 0
+    batch = 1
+    progress_bar = progress_bar = progress_bar = bar(
+        "Working on batch #" + str(batch) + "'s images...",
+        fill="@",
+        suffix="%(percent).1f%% - %(eta)ds",
+    )
+
+    # scope for google photos view perms
+    scope = "photoslibrary.readonly"
+
+    # figure out where script left off if it crashed on the last run
+    async with aiofiles.open("output/current.json") as current_save:
+        next_page = json.loads(await current_save.read())["next_page"]
+    async with aiofiles.open("output/raw_data.json") as previous_data:
+        previous_data = json.loads(await previous_data.read())
+    output = []
+
+    progress_bar.next()
+    # begin pagation
     try:
-        # create client object and auth the account for the google photo scope
-        client = google_api()
-        await client.auth("photoslibrary.readonly")
-
-        i = 0
-        firstLapse = True
         while True:
+            # progress the progress bar
+            progress_bar.next()
+            progress_reset_counter += 1
+            if progress_reset_counter == 99:
+                progress_reset_counter = 0
+                batch += 1
+                print()
+                progress_bar = progress_bar = bar(
+                    "Working on batch #" + str(batch) + "'s images...",
+                    fill="@",
+                    suffix="%(percent).1f%% - %(eta)ds",
+                )
+
             # attempt page itteration
             try:
                 # set up params for api request
@@ -32,9 +81,7 @@ async def main():
                     params["pageToken"] = next_page
 
                 # request google photos data from google
-                data = await client.request(
-                    "mediaItems", "photoslibrary.readonly", params=params
-                )
+                data = await client.request("mediaItems", scope, params=params)
 
                 # gather new page key
                 next_page = data["nextPageToken"]
@@ -42,11 +89,14 @@ async def main():
                 # extract media items
                 data = data["mediaItems"]
 
-                if not firstLapse:
-                    data = previous_data + data
+                # combine previous data with new data
+                data = previous_data + data 
 
-                firstLapse = False
+                # save previous data
                 previous_data = data
+
+                # update output with the data
+                output += data
 
             # page itteration is complete
             except KeyError:
@@ -54,23 +104,17 @@ async def main():
                     next_page = data["nextPageToken"]
                 else:
                     break
-
-            i += 100
-            print("On image #"+str(i))
-
-            # store data to output/raw_data.json file
-            with open("output/raw_data.json", "w") as final_data:
-                json.dump(data, final_data, indent=3)
-
     finally:
         # close aiohttp session
         await client.close_session()
 
-        # save status
-        with open("output/current.json", "w") as current_save:
-            pending_save = {"next_page": next_page}
-            json.dump(pending_save, current_save, indent=3)
+    #disable memory buffering to reduce ram usage
+    with open("output/raw_data.json", "w", 0) as final_data:
+        await final_data.write(json.dumps(output, indent=3))
 
+    # save status of script
+    with open("output/current.json", "w") as current_save:
+        await current_save.write(json.dumps({"next_page": next_page}, indent=3))
 
 # run main script
 asyncio.run(main())
