@@ -1,9 +1,10 @@
 import pkce
 import json
 from webbrowser import open_new
-from aiohttp_retry import RetryClient, ListRetry
+from aiohttp_retry import RetryClient, ExponentialRetry
 from time import time
 import aiohttp
+import aiofiles
 
 
 class google:
@@ -24,26 +25,25 @@ class google:
             auth["https://www.googleapis.com/auth/this.is.a.scope"]["expires_at"]: UNIX timestamp for when the access_token for the given scope expires
     """
 
-    def __init__(self, auth_file="auth.json"):
+    def __init__(
+        self, debug=False, auth_file="auth.json"
+    ) -> None:
         """
         Creates aiohttp client session for async web requests, and stores auth_file name
 
         Args:
             auth_file: name of auth file (string)
+            debug: print status messages to aid in debugging
         Returns:
             None
         """
 
+        # set object attributes
+        self.debug = debug
         self.scopes_file = auth_file
 
-        #create a session, which auto retries in .5, 2, and 6 second intervols, if a request times out
-        retry_options = ListRetry(
-            (
-                0.5,
-                2,
-                6,
-            )
-        )
+        # create a session, which auto retries if request times out
+        retry_options = ExponentialRetry(attempts=3)
         retry_client = RetryClient(raise_for_status=False, retry_options=retry_options)
         self.session = retry_client
 
@@ -62,7 +62,7 @@ class google:
         """
         return json.load(open(self.scopes_file))
 
-    def dump_auth_file(self, dict):
+    def dump_auth_file(self, dict) -> None:
         """
         Dump a dict to the auth file json
 
@@ -77,7 +77,7 @@ class google:
         """
         json.dump(dict, open(self.scopes_file, "w"), indent=3)
 
-    async def auth(self, scope, open_in_browser=True):
+    async def auth(self, scope, open_in_browser=True) -> None:
         """
         Update the self.scopes attribute (obtain valid access_tokens for accessing google api)
 
@@ -91,6 +91,9 @@ class google:
         Returns:
             None (updates class attributes and auth file)
         """
+
+        if self.debug:
+            print("Authing google account for scope " + scope + "...", end="\r")
 
         # load the auth file data
         auth_file = self.load_auth_file()
@@ -126,7 +129,8 @@ class google:
                 + "&scope=https://www.googleapis.com/auth/"
                 + scope
                 + "&response_type=code"
-                + "&redirect_uri=urn:ietf:wg:oauth:2.0:oob"
+                + "&redirect_uri="
+                + redirect_uri
                 + "&code_challenge="
                 + code_challenge
                 + "&code_challenge_method=S256"
@@ -138,7 +142,7 @@ class google:
 
             # prompt user for code google gives them after they finish the auth steps
             params["code"] = input(
-                +auth_url
+                auth_url
                 + "\n"
                 + "Please go to the above url into a web browser, and paste the code google gives you here: "
             )
@@ -156,8 +160,11 @@ class google:
             if "refresh_token" not in self.scopes[scope]:
                 self.scopes[scope]["refresh_token"] = resp["refresh_token"]
 
-            # otherwise, there shouldn't be any refresh token in the response
-            self.scopes[scope]["access_token"] = resp["access_token"]
+            try:
+                # otherwise, there shouldn't be any refresh token in the response
+                self.scopes[scope]["access_token"] = resp["access_token"]
+            except KeyError:
+                raise Exception("Account failed to auth")
 
             # store the expire timestamp for the access token
             self.scopes[scope]["expires_at"] = round(time() + resp["expires_in"]) - 1
@@ -165,16 +172,25 @@ class google:
         # save auth information to json file
         self.dump_auth_file({"scopes": self.scopes, "appdata": self.appdata})
 
-    async def request(self, endpoint, scope, params="", headers={}):
+        if self.debug:
+            print("Authed google account for scope " + scope + " " * 5)
+
+    async def request(
+        self, endpoint, scope, method="get", data=None, params="", headers={}
+    ) -> dict:
         """
         Make a request to a google api endpoint
 
         Args:
             endpoint: the endpoint to gather data from (to proform a GET request to)
             scope: the scope needed to access that endpoint
+            method: the http method to send the request with (get, post, patch, ext.)
+            data: request body
+            params: params for requeust
+            headers: headers for request
 
         Returns:
-            either response as a dictonary, or status code if status code != 200
+            either response dict, or status code if status code != 200
         """
 
         try:
@@ -187,16 +203,52 @@ class google:
             "Authorization": "Bearer " + self.scopes[scope]["access_token"],
             **headers,
         }
-        async with self.session.get(
-            "https://photoslibrary.googleapis.com/v1/" + endpoint,
-            headers=headers,
-            params=params,
-            timeout=aiohttp.ClientTimeout(6),
-        ) as resp:
-            if resp.status == 200:
-                return await resp.json()
-            else:
-                return resp.status
+
+        if method == "get":
+            resp = await self.session.get(
+                "https://photoslibrary.googleapis.com/v1/" + endpoint,
+                headers=headers,
+                params=params,
+                timeout=aiohttp.ClientTimeout(6),
+            )
+
+        if method == "post":
+            resp = await self.session.post(
+                "https://photoslibrary.googleapis.com/v1/" + endpoint,
+                headers=headers,
+                params=params,
+                json=data,
+                timeout=aiohttp.ClientTimeout(6),
+            )
+
+        resp_dict = await resp.json()
+        if resp.status == 200:
+            return resp_dict
+        elif resp.status == 429:
+            print(json.dumps(resp_dict, indent=3))
+            raise Exception("Ratelimited")
+        elif resp.status == 400:
+            print(json.dumps(resp_dict, indent=3))
+            raise Exception("Invalid form body")
+        else:
+            return resp.status
+
+    async def download_file(self, name, url, download_path="output/") -> None:
+        """
+        Function to download a file from a google base url
+
+        Args:
+            name: name to store the file as (saved in the download_path directory)
+            download_path: path to store downloaded files to (includes trailing slash; example: "C:\Windows\System32\")
+        """
+
+        headers = {
+            "Authentication": "Bearer "
+            + self.scopes["photoslibrary.readonly"]["access_token"]
+        }
+        async with self.session.get(url, headers=headers) as resp:
+            with open(download_path + name, "wb", 0) as photo:
+                photo.write(await resp.read())
 
     async def close_session(self):
         """
