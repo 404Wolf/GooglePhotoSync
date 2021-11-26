@@ -123,3 +123,5 @@ dmypy.json
 auth.json
 /auth.json
 .auth.json
+output
+/output
