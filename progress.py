@@ -22,7 +22,7 @@ class progress:
 
         print(self.msg + self.states[self.state], end="\r")
 
-    def next(self):
+    def next(self, msg=""):
         """
         Progress the spinner
         """

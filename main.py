@@ -7,11 +7,17 @@ import ciso8601 as datetime
 from progress import progress
 from time import sleep
 from os import listdir
+from tqdm import tqdm
+import aiofiles
+from cursor import show, hide
+
+hide()
 
 # set the event policy to prevent windows bugs
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# load config file
 with open("config.json") as config:
     config = json.load(config)
 
@@ -46,22 +52,24 @@ async def load_data(lapse):
 
         # load data from data file
         try:
-            for path in (
-                config["raw_data_output_path"],
-                config["raw_data_backup_output_path"]
-            ):
-                with open(path) as data:
-                    data = json.load(data)
+            async with aiofiles.open(config["raw_data_output_path"]) as data:
+                data = json.loads(await data.read())
+                if ("stats" not in data) or ("media" not in data):
+                    raise Exception
+        except:
+            try:
+                async with aiofiles.open(config["raw_data_backup_output_path"]) as data:
+                    data = json.loads(await data.read())
                     if ("stats" not in data) or ("media" not in data):
                         raise Exception
-                    break
-        except:
-            data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
+
+            except:
+                data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
 
         data = await fetch_library(client, data)
 
         # double check what is and isn't downloaded
-        progress_spinner = progress(
+        progress_tracker = progress(
             "Scanning media output directory... ",
             "Finished scanning media output directory.",
         )
@@ -72,22 +80,22 @@ async def load_data(lapse):
                 data["media"][media]["downloaded"] = False
             else:
                 data["media"][media]["downloaded"] = True
-            progress_spinner.next()
-        progress_spinner.finish()
+            progress_tracker.next()
+        progress_tracker.finish()
 
         # download the images found in data
         data = await download_library(client, data)
 
         # backup the raw data (since it was not obtained via a direct cancel)
-        with open(
+        async with aiofiles.open(
             config["raw_data_output_path"].replace(".json", "") + "-backup.json", "w"
         ) as final_data:
-            json.dump(data, final_data, indent=3)
+            await final_data.write(json.dumps(data, indent=3))
 
     finally:
         # save outputted data
-        with open(config["raw_data_output_path"], "w") as final_data:
-            json.dump(data, final_data, indent=3)
+        async with aiofiles.open(config["raw_data_output_path"], "w") as final_data:
+            await final_data.write(json.dumps(data, indent=3))
 
         # print log message
         print(
@@ -103,6 +111,9 @@ async def load_data(lapse):
         # close aiohttp session
         await client.close_session()
 
+        # reshow the cursor
+        show()
+
 
 async def download_library(client, data):
     """
@@ -113,10 +124,9 @@ async def download_library(client, data):
         data: data in the structure as outputted to data.json example: {"stats":{<stat-data>,"media":{<media-type-1>:{<photo-data>}}}
     """
 
-    progress_spinner = progress("Downloading media... ", "Finished downloading media.")
+    progress_tracker = tqdm(total=len(data["media"]))
 
     async def current_download_data(data):
-
         for media, media_data in data["media"].items():
 
             # if flagged as not yet downloaded
@@ -134,6 +144,8 @@ async def download_library(client, data):
 
     download_tasks = []
     async for media, media_data in current_download_data(data):
+        progress_tracker.update(1)
+
         if "video" in media_data["type"]:
             media_data["url"] += "=dv"
         else:
@@ -153,13 +165,11 @@ async def download_library(client, data):
         if len(download_tasks) == config["concurrent_downloads"]:
             download_tasks = await asyncio.wait(download_tasks)
             download_tasks = []
-            progress_spinner.next()  # tick progress spinner
 
     if len(download_tasks) > 0:
         await asyncio.wait(download_tasks)
 
     # switch to progress spinner's ending message
-    progress_spinner.finish()
     return data
 
 
@@ -178,16 +188,13 @@ async def fetch_library(client, data, media_types=("VIDEO", "PHOTO")):
     start = time()
 
     # create progress spinner
-    progress_spinner = progress("Fetching media... ", "Finished fetching media.")
+    progress_tracker = progress("Fetching media... ", "Finished fetching media.")
 
     for media_type in media_types:
         next_page = ""
 
         # begin pagation
         while True:
-            # progress the progress bar
-            progress_spinner.next()
-
             # attempt page itteration
             try:
                 request_data = {
@@ -210,7 +217,11 @@ async def fetch_library(client, data, media_types=("VIDEO", "PHOTO")):
                     data=request_data,
                 )
 
+                # gather new page key
+                next_page = response_data["nextPageToken"]
+
                 for entry in response_data["mediaItems"]:
+
                     # convert timestring to timestamp
                     entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
                         entry["mediaMetadata"]["creationTime"]
@@ -230,7 +241,7 @@ async def fetch_library(client, data, media_types=("VIDEO", "PHOTO")):
 
                     try:
                         downloaded = data["media"][entry["id"]]["downloaded"]
-                    except KeyError:
+                    except:
                         downloaded = False
 
                     # only keep needed data when dumping to output
@@ -243,15 +254,18 @@ async def fetch_library(client, data, media_types=("VIDEO", "PHOTO")):
                         "downloaded": downloaded,
                     }
 
-                # gather new page key
-                next_page = response_data["nextPageToken"]
-
             # page itteration is complete
             except KeyError:
-                break
+                if "nextPageToken" not in response_data:
+                    # no pages were left, so move on to next media type/end
+                    break
+
+            finally:
+                # progress the progress bar
+                progress_tracker.next()
 
     # switch to progress spinner's ending message
-    progress_spinner.finish()
+    progress_tracker.finish()
 
     # record end UNIX time
     end = time()
@@ -274,5 +288,7 @@ lapse = 1
 while True:
     asyncio.run(load_data(lapse))
     lapse += 1
-    print("\nWaiting "+str(config["scan_library_interval"])+" hours until next lapse.")
+    print(
+        "\nWaiting " + str(config["scan_library_interval"]) + " hours until next lapse."
+    )
     sleep(config["scan_library_interval"] * 60 * 60)
