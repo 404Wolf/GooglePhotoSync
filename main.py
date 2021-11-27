@@ -2,41 +2,30 @@ from google import google
 import asyncio
 import sys
 import json
-from progress.spinner import Spinner as spinner
 from time import time, mktime
 import ciso8601 as datetime
-import os
-
-
-override = False  # force a refresh
-refresh_library_interval = 6  # in hours
-
+from progress import progress
+from time import sleep
+from os import listdir
 
 # set the event policy to prevent windows bugs
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+with open("config.json") as config:
+    config = json.load(config)
 
-class progress:
-    def __init__(self, msg, endmsg):
-        self.states = ["/", "|", "\\", "-"]
-        self.state = 0
-        self.msg = msg
-        self.endmsg = endmsg
-        print(self.msg + self.states[self.state], end="\r")
-
-    def next(self):
-        self.state += 1
-        if self.state == 4:
-            self.state = 0
-        print(self.msg + self.states[self.state], end="\r")
-
-    def finish(self):
-        print(" " * (len(self.msg) + 1), end="\r")
-        print(self.endmsg)
+# locate backup path (same directory and file type but has -backup)
+config["raw_data_backup_output_path"] = config["raw_data_output_path"].split(".")
+config["raw_data_backup_output_path"] = (
+    config["raw_data_backup_output_path"][0]
+    + "-backup"
+    + "."
+    + config["raw_data_backup_output_path"][1]
+)
 
 
-async def load_data():
+async def load_data(lapse):
     """
     Main function (async script)
 
@@ -56,24 +45,55 @@ async def load_data():
         await client.auth("photoslibrary.readonly")
 
         # load data from data file
-        with open("output/raw_data.json") as data:
-            data = json.load(data)
+        try:
+            for path in (
+                config["raw_data_output_path"],
+                config["raw_data_backup_output_path"]
+            ):
+                with open(path) as data:
+                    data = json.load(data)
+                    if ("stats" not in data) or ("media" not in data):
+                        raise Exception
+                    break
+        except:
+            data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
 
-        # if data is outdated, reload it
-        if (
-            data["stats"]["last_check"]["finished_check_at"] < time() + 60 * 40
-            or override
-        ):
-            data = await fetch_library(client, output_file="output/raw_data.json")
+        data = await fetch_library(client, data)
+
+        # double check what is and isn't downloaded
+        progress_spinner = progress(
+            "Scanning media output directory... ",
+            "Finished scanning media output directory.",
+        )
+
+        already_downloaded = listdir(config["media_output_path"])
+        for media, media_data in tuple(data["media"].items()):
+            if media_data["filename"] not in already_downloaded:
+                data["media"][media]["downloaded"] = False
+            else:
+                data["media"][media]["downloaded"] = True
+            progress_spinner.next()
+        progress_spinner.finish()
 
         # download the images found in data
-        await download_library(client, data)
+        data = await download_library(client, data)
+
+        # backup the raw data (since it was not obtained via a direct cancel)
+        with open(
+            config["raw_data_output_path"].replace(".json", "") + "-backup.json", "w"
+        ) as final_data:
+            json.dump(data, final_data, indent=3)
 
     finally:
+        # save outputted data
+        with open(config["raw_data_output_path"], "w") as final_data:
+            json.dump(data, final_data, indent=3)
+
         # print log message
-        print()
         print(
-            "Google Photo Sync Tool Finished.\n"
+            "Google Photo Syncing Complete (lapse "
+            + str(lapse)
+            + ")\n"
             + "Time taken: "
             + str(round(time() - start, 3))
             + " seconds ("
@@ -84,67 +104,66 @@ async def load_data():
         await client.close_session()
 
 
-async def download_library(client, data, download_path="output/media"):
+async def download_library(client, data):
     """
     Function to download entire google photos library, skipping over already downloaded photos
 
     Args:
         client: google_api client object
         data: data in the structure as outputted to data.json example: {"stats":{<stat-data>,"media":{<media-type-1>:{<photo-data>}}}
-        download_path: path of where to output to
     """
 
-    async def current_download_data(data):
-        progress_spinner = progress("Downloading media...","Finished downloading media.")
-        progress_spinner.next()
+    progress_spinner = progress("Downloading media... ", "Finished downloading media.")
 
-        # fetch list of already downloaded files
-        present_files = os.listdir(download_path)
+    async def current_download_data(data):
 
         for media, media_data in data["media"].items():
 
-            # download media only if it isn't already there
-            if media_data["filename"] not in present_files:
+            # if flagged as not yet downloaded
+            if not media_data["downloaded"]:
 
                 # if the media base_url is expired generate a new one
                 if media_data["last_checked_at"] > time() + 50 * 60:
                     media_data = await client.request(
                         "mediaItems/" + media, "photoslibrary.readonly"
                     )
+                    print("regen")
 
-                progress_spinner.next()
-                yield media_data
-
-        progress_spinner.finish()
+                # yield the data
+                yield media, media_data
 
     download_tasks = []
-    async for media_data in current_download_data(data):
+    async for media, media_data in current_download_data(data):
         if "video" in media_data["type"]:
-            media_data["baseUrl"] += "=dv"
+            media_data["url"] += "=dv"
+        else:
+            media_data["url"] += "=d"
 
-        file_name = media_data["filename"]
-        file_name = file_name.split(".")
-        file_name = file_name[:-1]
-        file_name = "".join(file_name)
-        file_name += "." + media_data["type"].split("/")[-1]
         download_tasks.append(
             asyncio.ensure_future(
                 client.download_file(
-                    file_name, media_data["url"], download_path="output/media/"
+                    media_data["filename"],
+                    media_data["url"],
+                    download_path=config["media_output_path"],
                 )
             )
         )
+        data["media"][media]["downloaded"] = True
 
-        if len(download_tasks) == 6:
+        if len(download_tasks) == config["concurrent_downloads"]:
             download_tasks = await asyncio.wait(download_tasks)
             download_tasks = []
+            progress_spinner.next()  # tick progress spinner
 
-    await asyncio.wait(download_tasks)
+    if len(download_tasks) > 0:
+        await asyncio.wait(download_tasks)
+
+    # switch to progress spinner's ending message
+    progress_spinner.finish()
+    return data
 
 
-async def fetch_library(
-    client, media_types=("VIDEO", "PHOTO"), output_file="output.json"
-):
+async def fetch_library(client, data, media_types=("VIDEO", "PHOTO")):
     """
     Function to pull data for every single photo, and store it as a json
 
@@ -158,11 +177,8 @@ async def fetch_library(
     # record start UNIX time
     start = time()
 
-    # predefine variables
-    output = {}
-
     # create progress spinner
-    progress_spinner = progress("Fetching media...","Finished fetching media.")
+    progress_spinner = progress("Fetching media... ", "Finished fetching media.")
 
     for media_type in media_types:
         next_page = ""
@@ -187,14 +203,14 @@ async def fetch_library(
                     request_data["pageToken"] = next_page
 
                 # request google photos data from google
-                data = await client.request(
+                response_data = await client.request(
                     "mediaItems:search",
                     "photoslibrary.readonly",
                     method="post",
                     data=request_data,
                 )
 
-                for entry in data["mediaItems"]:
+                for entry in response_data["mediaItems"]:
                     # convert timestring to timestamp
                     entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
                         entry["mediaMetadata"]["creationTime"]
@@ -212,49 +228,51 @@ async def fetch_library(
                         entry["mediaMetadata"]["height"]
                     )
 
+                    try:
+                        downloaded = data["media"][entry["id"]]["downloaded"]
+                    except KeyError:
+                        downloaded = False
+
                     # only keep needed data when dumping to output
-                    output[entry["id"]] = {
+                    data["media"][entry["id"]] = {
                         "url": entry["baseUrl"],
-                        "filename": entry["filename"],
+                        "filename": entry["filename"].replace(" ", "_"),
                         "type": entry["mimeType"],
                         "metadata": entry["mediaMetadata"],
                         "last_checked_at": int(time()),
+                        "downloaded": downloaded,
                     }
 
                 # gather new page key
-                next_page = data["nextPageToken"]
+                next_page = response_data["nextPageToken"]
 
             # page itteration is complete
             except KeyError:
-                if "nextPageToken" in data:
-                    next_page = data["nextPageToken"]
-                else:
-                    break
+                break
 
+    # switch to progress spinner's ending message
     progress_spinner.finish()
 
     # record end UNIX time
     end = time()
 
     # create output dict to dump to file
-    output = {
-        "stats": {
-            "last_check": {
-                "started_check_at": round(start),
-                "finished_check_at": round(end),
-                "time_taken": round(end - start),
-            },
-            "items_found": len(output),
+    data["stats"] = {
+        "last_check": {
+            "started_check_at": round(start),
+            "finished_check_at": round(end),
+            "time_taken": round(end - start),
         },
-        "media": output,
+        "items_found": len(data),
     }
 
-    # dump dict to file as a json
-    with open(output_file, "w") as final_data:
-        json.dump(output, final_data, indent=3)
-
-    return output
+    return data
 
 
-# run main script
-asyncio.run(load_data())
+# run main script every specified interval (in hours)
+lapse = 1
+while True:
+    asyncio.run(load_data(lapse))
+    lapse += 1
+    print("\nWaiting "+str(config["scan_library_interval"])+" hours until next lapse.")
+    sleep(config["scan_library_interval"] * 60 * 60)

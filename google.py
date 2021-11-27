@@ -233,7 +233,7 @@ class google:
         else:
             return resp.status
 
-    async def download_file(self, name, url, download_path="output/") -> None:
+    async def download_file(self, name, url, download_path="/") -> None:
         """
         Function to download a file from a google base url
 
@@ -247,8 +247,8 @@ class google:
             + self.scopes["photoslibrary.readonly"]["access_token"]
         }
         async with self.session.get(url, headers=headers) as resp:
-            with open(download_path + name, "wb", 0) as photo:
-                photo.write(await resp.read())
+            async with aiofiles.open(download_path + name, "wb", 0) as photo:
+                await photo.write(await resp.read())
 
     async def close_session(self):
         """
