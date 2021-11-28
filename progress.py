@@ -47,7 +47,7 @@ class spinner:
             self.msg
             + self.states[self.state]
             + " "
-            + "{:.2f}".format(str(time() - self.start))
+            + "{:.2f}".format(time() - self.start)
             + "s",
             end="\r",
         )
