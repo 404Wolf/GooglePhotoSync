@@ -47,7 +47,7 @@ class spinner:
             self.msg
             + self.states[self.state]
             + " "
-            + str(round(time() - self.start, 2))
+            + "{:.2f}".format(str(time() - self.start, 2))
             + "s",
             end="\r",
         )
@@ -141,7 +141,7 @@ class bar:
             eta = time() - self.start  # elapsed time since object creation
             eta = eta / self.state  # average time per state change
             eta = eta * (self.total - self.state)  # time for states left
-            eta = round(eta, 2)
+            eta = "{:.2f}".format(eta)
         except ZeroDivisionError:
             eta = 0
 
