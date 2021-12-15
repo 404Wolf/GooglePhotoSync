@@ -1,7 +1,7 @@
 {
-    "media_output_path":"output/media/",
-    "raw_data_output_path":"output/raw_data.json",
-    "concurrent_downloads":20,
-    "scan_library_interval":6,
-    "always_refresh_on_start":false
+    "client_id":"abc",
+    "client_secret":"xyz",
+    "concurrent_downloads":12,
+    "scan_library_interval":12,
+    "open_browser_to_auth":false
 }
