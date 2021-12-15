@@ -25,7 +25,9 @@ class google:
             auth["https://www.googleapis.com/auth/this.is.a.scope"]["expires_at"]: UNIX timestamp for when the access_token for the given scope expires
     """
 
-    def __init__(self, debug=False, auth_file="auth.json") -> None:
+    def __init__(
+        self, debug=False, auth_file="auth.json", open_in_browser=True
+    ) -> None:
         """
         Creates aiohttp client session for async web requests, and stores auth_file name
 
@@ -39,6 +41,7 @@ class google:
         # set object attributes
         self.debug = debug
         self.scopes_file = auth_file
+        self.open_in_browser = open_in_browser
 
         # create a session, which auto retries if request times out
         retry_options = ExponentialRetry(attempts=3)
@@ -75,7 +78,7 @@ class google:
         """
         json.dump(dict, open(self.scopes_file, "w"), indent=3)
 
-    async def auth(self, scope: str, open_in_browser=True) -> None:
+    async def auth(self, scope: str) -> None:
         """
         Update the self.scopes attribute (obtain valid access_tokens for accessing google api)
 
@@ -135,7 +138,7 @@ class google:
             )
 
             # open it in a web browser
-            if open_in_browser:
+            if self.open_in_browser:
                 open_new(auth_url)
 
             # prompt user for code google gives them after they finish the auth steps

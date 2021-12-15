@@ -19,20 +19,24 @@ if sys.platform == "win32":
 with open("config.json") as config:
     config = json.load(config)
 
-# move auth info to auth file if needed
-with open("auth.json") as auth:
-    auth = json.load(auth)
+root_directory = listdir()
 
-    if "appdata" not in auth:
-        auth["appdata"] = {
-            "client_id": config["client_id"],
-            "client_secret": config["client_secret"],
-        }
-
-    open("auth.json", "w").write(json.dumps(auth, indent=3))
+if "auth" not in root_directory:
+    with open("auth.json", "w") as auth:
+        json.dump(
+            {
+                "appdata": {
+                    "client_id": config["client_id"],
+                    "client_secret": config["client_secret"],
+                },
+                "scopes": {},
+            },
+            auth,
+            indent=3,
+        )
 
 # if folder layout isn't setup, assume fresh install and setup
-if "output" not in listdir():
+if "output" not in root_directory:
     mkdir("output")
     mkdir("output/media")
     open("output/data.json", "w").write("{}")
@@ -55,10 +59,12 @@ async def load_data(lapse: int) -> None:
     # load the data from file, or refresh if outdated
     try:
         # create google client object and auth for google photos
-        client = google(auth_file="auth.json")
+        client = google(
+            auth_file="auth.json", open_in_browser=config["open_browser_to_auth"]
+        )
         await client.auth("photoslibrary.readonly")
 
-        # load data from data file
+        # load data from data file; or from backup if main data file is corrupted
         try:
             async with aiofiles.open("output/data.json") as data:
                 data = json.loads(await data.read())
@@ -107,7 +113,7 @@ async def load_data(lapse: int) -> None:
         await client.close_session()
 
 
-async def download_library(client: google(), data: dict) -> dict:
+async def download_library(client, data: dict) -> dict:
     """
     Function to download entire google photos library, skipping over already downloaded photos.
 
@@ -163,7 +169,7 @@ async def download_library(client: google(), data: dict) -> dict:
     return data
 
 
-async def fetch_library(client: google(), data: dict) -> dict:
+async def fetch_library(client, data: dict) -> dict:
     """
     Function to pull data for every single photo, and store it as a json
 
@@ -188,6 +194,7 @@ async def fetch_library(client: google(), data: dict) -> dict:
 
     # begin pagation
     while "nextPageToken" in response_data:
+        # pageSize is 100 to maximize efficiency; includeArchivedMedia is enabled because by default it is false
         request_data = {"pageSize": 100, "filters": {"includeArchivedMedia": True}}
 
         if bool(
