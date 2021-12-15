@@ -20,7 +20,7 @@ with open("config.json") as config:
 
 root_directory = listdir()
 
-if "auth" not in root_directory:
+if "auth.json" not in root_directory:
     with open("auth.json", "w") as auth:
         json.dump(
             {
