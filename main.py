@@ -6,7 +6,7 @@ from time import time, mktime
 import ciso8601 as datetime
 import progress
 from time import sleep
-from os import listdir
+from os import listdir, mkdir
 import aiofiles
 from sanitize_filename import sanitize
 
@@ -27,6 +27,11 @@ config["raw_data_backup_output_path"] = (
     + config["raw_data_backup_output_path"][1]
 )
 
+# if folder layout isn't setup, assume fresh install and setup
+if "output" not in listdir():
+    mkdir("output")
+    mkdir("output/media")
+    open("output/raw_data.json", "w").write("{}")
 
 async def load_data(lapse):
     """
