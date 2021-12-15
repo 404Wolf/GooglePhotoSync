@@ -123,7 +123,7 @@ class bar:
 
         self.state += ticks  # tick the bar forward
 
-        if self.state > self.total:
+        if self.state > self.total + 1:
             raise OverflowError("Progress bar total has been hit")
 
         # calculate how many ticks, and round to the lowest int
