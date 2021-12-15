@@ -47,7 +47,7 @@ class google:
         retry_client = RetryClient(raise_for_status=False, retry_options=retry_options)
         self.session = retry_client
 
-    def load_auth_file(self):
+    def load_auth_file(self) -> dict:
         """
         Reads the auth_file and returns it's contents as a json
 
@@ -62,7 +62,7 @@ class google:
         """
         return json.load(open(self.scopes_file))
 
-    def dump_auth_file(self, dict) -> None:
+    def dump_auth_file(self, dict: dict) -> None:
         """
         Dump a dict to the auth file json
 
@@ -77,7 +77,7 @@ class google:
         """
         json.dump(dict, open(self.scopes_file, "w"), indent=3)
 
-    async def auth(self, scope, open_in_browser=True) -> None:
+    async def auth(self, scope: str, open_in_browser=True) -> None:
         """
         Update the self.scopes attribute (obtain valid access_tokens for accessing google api)
 
@@ -176,7 +176,7 @@ class google:
             print("Authed google account for scope " + scope + " " * 5)
 
     async def request(
-        self, endpoint, scope, method="get", data=None, params="", headers={}
+        self, endpoint:str, scope: str, method="get", data=None, params="", headers={}
     ) -> dict:
         """
         Make a request to a google api endpoint
@@ -193,12 +193,14 @@ class google:
             either response dict, or status code if status code != 200
         """
 
+        # reauth if access token is expired expired
         try:
             if self.scopes[scope]["expires_at"] < time():
                 await self.auth(scope)
         except KeyError:
             await self.auth(scope)
 
+        # create auth headers + extra headers
         headers = {
             "Authorization": "Bearer " + self.scopes[scope]["access_token"],
             **headers,
@@ -221,19 +223,22 @@ class google:
                 timeout=aiohttp.ClientTimeout(6),
             )
 
-        resp_dict = await resp.json()
-        if resp.status == 200:
-            return resp_dict
-        elif resp.status == 429:
+        resp_dict = await resp.json() # await the response dict
+
+        if resp.status == 200: # 200 -> successful response
+            return resp_dict # return the response's dict
+
+        elif resp.status == 429: # 429 -> ratelimited
             print(json.dumps(resp_dict, indent=3))
-            raise Exception("Ratelimited")
-        elif resp.status == 400:
+            raise Exception("Ratelimited") # raise exception
+            
+        elif resp.status == 400: # 400 -> bad request
             print(json.dumps(resp_dict, indent=3))
-            raise Exception("Invalid form body")
+            raise Exception("Invalid form body") # raise exception
         else:
             return resp.status
 
-    async def download_file(self, name, url, download_path="/") -> None:
+    async def download_file(self, name: str, url: str, download_path="/") -> None:
         """
         Function to download a file from a google base url
 

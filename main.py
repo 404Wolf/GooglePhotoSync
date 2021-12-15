@@ -1,4 +1,5 @@
-from google import google
+from asyncio.windows_events import NULL
+from utils import google
 import asyncio
 import sys
 import json
@@ -18,31 +19,36 @@ if sys.platform == "win32":
 with open("config.json") as config:
     config = json.load(config)
 
-# locate backup path (same directory and file type but has -backup)
-config["raw_data_backup_output_path"] = config["raw_data_output_path"].split(".")
-config["raw_data_backup_output_path"] = (
-    config["raw_data_backup_output_path"][0]
-    + "-backup"
-    + "."
-    + config["raw_data_backup_output_path"][1]
-)
+# move auth info to auth file if needed
+with open("auth.json") as auth:
+    auth = json.load(auth)
+
+    if "appdata" not in auth:
+        auth["appdata"] = {
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+        }
+
+    open("auth.json", "w").write(json.dumps(auth, indent=3))
 
 # if folder layout isn't setup, assume fresh install and setup
 if "output" not in listdir():
     mkdir("output")
     mkdir("output/media")
-    open("output/raw_data.json", "w").write("{}")
+    open("output/data.json", "w").write("{}")
 
-async def load_data(lapse):
+
+async def load_data(lapse: int) -> None:
     """
-    Main function (async script)
+    Main function.
 
-    Args:
-        None
-    Returns:
-        None
+    1) auths with credentials from auth.json
+    2) checks if raw data json is valid, and if it isn't, attempt a restore from backup
+    3) pull data from google photos (current list of all photo data)
+    4) scan media directory to see what has been downloaded so far
+    5) download google photos library to media folder
+    6) backup data
     """
-
     # record start UNIX time
     start = time()
 
@@ -54,13 +60,13 @@ async def load_data(lapse):
 
         # load data from data file
         try:
-            async with aiofiles.open(config["raw_data_output_path"]) as data:
+            async with aiofiles.open("output/data.json") as data:
                 data = json.loads(await data.read())
                 if ("stats" not in data) or ("media" not in data):
                     raise Exception
         except:
             try:
-                async with aiofiles.open(config["raw_data_backup_output_path"]) as data:
+                async with aiofiles.open("output/data-backup.json") as data:
                     data = json.loads(await data.read())
                     if ("stats" not in data) or ("media" not in data):
                         raise Exception
@@ -68,33 +74,21 @@ async def load_data(lapse):
             except:
                 data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
 
+        # gather up-to-date data
         data = await fetch_library(client, data)
-
-        # double check what is and isn't downloaded
-        progress_tracker = progress.spinner("Scanning media output directory... ")
-
-        already_downloaded = listdir(config["media_output_path"])
-        for media, media_data in tuple(data["media"].items()):
-            if media_data["filename"] not in already_downloaded:
-                data["media"][media]["downloaded"] = False
-            else:
-                data["media"][media]["downloaded"] = True
-            progress_tracker.next()
-
-        progress_tracker.finish("Finished scanning media output directory.")
 
         # download the images found in data
         data = await download_library(client, data)
 
         # backup the raw data (since it was not obtained via a direct cancel)
         async with aiofiles.open(
-            config["raw_data_output_path"].replace(".json", "") + "-backup.json", "w"
+            "output/data.json".replace(".json", "") + "-backup.json", "w"
         ) as final_data:
             await final_data.write(json.dumps(data, indent=3))
 
     finally:
         # save outputted data
-        async with aiofiles.open(config["raw_data_output_path"], "w") as final_data:
+        async with aiofiles.open("output/data.json", "w") as final_data:
             await final_data.write(json.dumps(data, indent=3))
 
         # print log message
@@ -108,33 +102,31 @@ async def load_data(lapse):
             + str(round((time() - start) / 60, 4))
             + " minutes)"
         )
+
         # close aiohttp session
         await client.close_session()
 
 
-async def download_library(client, data):
+async def download_library(client: google(), data: dict) -> dict:
     """
-    Function to download entire google photos library, skipping over already downloaded photos
+    Function to download entire google photos library, skipping over already downloaded photos.
 
     Args:
         client: google_api client object
         data: data in the structure as outputted to data.json example: {"stats":{<stat-data>,"media":{<media-type-1>:{<photo-data>}}}
     """
-
     progress_tracker = progress.bar("Downloading media... ", total=len(data["media"]))
 
     async def current_download_data(data):
+        """Yields current baseurl for photo to download."""
         for media, media_data in data["media"].items():
-
             # if flagged as not yet downloaded
             if not media_data["downloaded"]:
-
                 # if the media base_url is expired generate a new one
                 if media_data["last_checked_at"] > time() + 50 * 60:
                     media_data = await client.request(
                         "mediaItems/" + media, "photoslibrary.readonly"
                     )
-
                 # yield the data
                 yield media, media_data
 
@@ -152,7 +144,7 @@ async def download_library(client, data):
                 client.download_file(
                     media_data["filename"],
                     media_data["url"],
-                    download_path=config["media_output_path"],
+                    download_path="output/media/",
                 )
             )
         )
@@ -171,7 +163,7 @@ async def download_library(client, data):
     return data
 
 
-async def fetch_library(client, data):
+async def fetch_library(client: google(), data: dict) -> dict:
     """
     Function to pull data for every single photo, and store it as a json
 
@@ -185,72 +177,68 @@ async def fetch_library(client, data):
     # record start UNIX time
     start = time()
 
-    # create progress spinner
+    # progress spinner
     progress_tracker = progress.spinner("Fetching media... ")
 
+    # emtpy dict for data google will send back
+    response_data = {"nextPageToken": ""}
+
+    # next page pagation token
     next_page = ""
 
     # begin pagation
-    while True:
-        # attempt page itteration
-        try:
-            params = {"pageSize": 100}
+    while "nextPageToken" in response_data:
+        params = {"pageSize": 100}
 
-            if bool(next_page):
-                params["pageToken"] = next_page
+        if bool(next_page):
+            params["pageToken"] = next_page
 
-            # request google photos data from google
-            response_data = await client.request(
-                "mediaItems",
-                "photoslibrary.readonly",
-                params=params,
+        # gather new page key
+        next_page = response_data["nextPageToken"]
+
+        # request google photos data from google
+        response_data = await client.request(
+            "mediaItems",
+            "photoslibrary.readonly",
+            params=params,
+        )
+
+        for entry in response_data["mediaItems"]:
+
+            # convert timestring to timestamp
+            entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
+                entry["mediaMetadata"]["creationTime"]
             )
 
-            # gather new page key
-            next_page = response_data["nextPageToken"]
+            entry["mediaMetadata"]["creationTime"] = int(
+                mktime(entry["mediaMetadata"]["creationTime"].timetuple())
+            )
 
-            for entry in response_data["mediaItems"]:
+            # convert image size values to integers
+            entry["mediaMetadata"]["width"] = int(entry["mediaMetadata"]["width"])
+            entry["mediaMetadata"]["height"] = int(entry["mediaMetadata"]["height"])
 
-                # convert timestring to timestamp
-                entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
-                    entry["mediaMetadata"]["creationTime"]
-                )
+            try:
+                downloaded = data["media"][entry["id"]]["downloaded"]
+            except:
+                downloaded = False
 
-                entry["mediaMetadata"]["creationTime"] = int(
-                    mktime(entry["mediaMetadata"]["creationTime"].timetuple())
-                )
+            # only keep needed data when dumping to output
+            data["media"][entry["id"]] = {
+                "url": entry["baseUrl"],
+                "filename": sanitize(
+                    entry["id"] + "." + entry["mimeType"].split("/")[1]
+                ),
+                "type": entry["mimeType"],
+                "metadata": entry["mediaMetadata"],
+                "last_checked_at": int(time()),
+                "downloaded": downloaded,
+            }
 
-                # convert image size values to integers
-                entry["mediaMetadata"]["width"] = int(entry["mediaMetadata"]["width"])
-                entry["mediaMetadata"]["height"] = int(entry["mediaMetadata"]["height"])
-
-                try:
-                    downloaded = data["media"][entry["id"]]["downloaded"]
-                except:
-                    downloaded = False
-
-                # only keep needed data when dumping to output
-                data["media"][entry["id"]] = {
-                    "url": entry["baseUrl"],
-                    "filename": sanitize(entry["filename"]),
-                    "type": entry["mimeType"],
-                    "metadata": entry["mediaMetadata"],
-                    "last_checked_at": int(time()),
-                    "downloaded": downloaded,
-                }
-
-        # page itteration is complete
-        except KeyError:
-            if "nextPageToken" not in response_data:
-                # no pages were left, so move on to next media type/end
-                break
-
-        finally:
-            # progress the progress bar
-            progress_tracker.next()
+        progress_tracker.next()  # tick progress tracker
 
     # switch to progress spinner's ending message
-    progress_tracker.finish("Finished fetching media.")
+    progress_tracker.finish("Finished fetching media")
 
     # record end UNIX time
     end = time()

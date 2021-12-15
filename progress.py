@@ -62,9 +62,8 @@ class spinner:
             None
         """
 
-        print(" " * (len(self.msg) + 1), end="\r")
-        print(self.msg)
-        print(msg, end="\n\n")
+        print(" "*(len(self.msg)+12), end="\r")
+        print(msg)
 
         if self.hide_cursor:
             show()
@@ -123,7 +122,7 @@ class bar:
 
         self.state += ticks  # tick the bar forward
 
-        if self.state > self.total + 1:
+        if self.state > self.total:
             raise OverflowError("Progress bar total has been hit")
 
         # calculate how many ticks, and round to the lowest int
@@ -156,4 +155,7 @@ class bar:
         """
 
         self.state = self.total  # set current state to last tick
-        print(msg + ((self.width - len(msg) + 20) * " "))
+
+        print(" "*(len(self.msg)+self.width+12), end="\r")
+        if self.hide_cursor:
+            show()
