@@ -207,37 +207,28 @@ class google:
             **headers,
         }
 
-        if method == "get":
-            resp = await self.session.get(
-                "https://photoslibrary.googleapis.com/v1/" + endpoint,
-                headers=headers,
-                params=params,
-                timeout=aiohttp.ClientTimeout(6),
-            )
+        async with self.session.request(
+            method,
+            "https://photoslibrary.googleapis.com/v1/" + endpoint,
+            headers=headers,
+            params=params,
+            json=data,
+            timeout=aiohttp.ClientTimeout(6),
+        ) as resp:
+            resp_dict = await resp.json()  # await the response dict
 
-        if method == "post":
-            resp = await self.session.post(
-                "https://photoslibrary.googleapis.com/v1/" + endpoint,
-                headers=headers,
-                params=params,
-                json=data,
-                timeout=aiohttp.ClientTimeout(6),
-            )
+            if resp.status == 200:  # 200 -> successful response
+                return resp_dict  # return the response's dict
 
-        resp_dict = await resp.json()  # await the response dict
+            elif resp.status == 429:  # 429 -> ratelimited
+                print(json.dumps(resp_dict, indent=3))
+                raise Exception("Ratelimited")  # raise exception
 
-        if resp.status == 200:  # 200 -> successful response
-            return resp_dict  # return the response's dict
-
-        elif resp.status == 429:  # 429 -> ratelimited
-            print(json.dumps(resp_dict, indent=3))
-            raise Exception("Ratelimited")  # raise exception
-
-        elif resp.status == 400:  # 400 -> bad request
-            print(json.dumps(resp_dict, indent=3))
-            raise Exception("Invalid form body")  # raise exception
-        else:
-            return resp.status
+            elif resp.status == 400:  # 400 -> bad request
+                print(json.dumps(resp_dict, indent=3))
+                raise Exception("Invalid form body")  # raise exception
+            else:
+                return resp.status
 
     async def download_file(self, name: str, url: str, download_path="/") -> None:
         """
