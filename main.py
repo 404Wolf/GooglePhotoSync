@@ -188,52 +188,56 @@ async def fetch_library(client: google(), data: dict) -> dict:
 
     # begin pagation
     while "nextPageToken" in response_data:
-        params = {"pageSize": 100}
+        request_data = {"pageSize": 100, "filters": {"includeArchivedMedia": True}}
 
-        if bool(next_page):
-            params["pageToken"] = next_page
+        if bool(
+            next_page
+        ):  # if not first run, apply page token (bool() is used rather than len() > 0)
+            request_data["pageToken"] = next_page
 
-        # gather new page key
+        # gather new page key from last runthrough of page
         next_page = response_data["nextPageToken"]
 
         # request google photos data from google
         response_data = await client.request(
-            "mediaItems",
+            "mediaItems:search",
             "photoslibrary.readonly",
-            params=params,
+            method="post",
+            data=request_data,
         )
 
-        for entry in response_data["mediaItems"]:
+        if "mediaItems" in response_data:
+            for entry in response_data["mediaItems"]:
 
-            # convert timestring to timestamp
-            entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
-                entry["mediaMetadata"]["creationTime"]
-            )
+                # convert timestring to timestamp
+                entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
+                    entry["mediaMetadata"]["creationTime"]
+                )
 
-            entry["mediaMetadata"]["creationTime"] = int(
-                mktime(entry["mediaMetadata"]["creationTime"].timetuple())
-            )
+                entry["mediaMetadata"]["creationTime"] = int(
+                    mktime(entry["mediaMetadata"]["creationTime"].timetuple())
+                )
 
-            # convert image size values to integers
-            entry["mediaMetadata"]["width"] = int(entry["mediaMetadata"]["width"])
-            entry["mediaMetadata"]["height"] = int(entry["mediaMetadata"]["height"])
+                # convert image size values to integers
+                entry["mediaMetadata"]["width"] = int(entry["mediaMetadata"]["width"])
+                entry["mediaMetadata"]["height"] = int(entry["mediaMetadata"]["height"])
 
-            try:
-                downloaded = data["media"][entry["id"]]["downloaded"]
-            except:
-                downloaded = False
+                try:
+                    downloaded = data["media"][entry["id"]]["downloaded"]
+                except:
+                    downloaded = False
 
-            # only keep needed data when dumping to output
-            data["media"][entry["id"]] = {
-                "url": entry["baseUrl"],
-                "filename": sanitize(
-                    entry["id"] + "." + entry["mimeType"].split("/")[1]
-                ),
-                "type": entry["mimeType"],
-                "metadata": entry["mediaMetadata"],
-                "last_checked_at": int(time()),
-                "downloaded": downloaded,
-            }
+                # only keep needed data when dumping to output
+                data["media"][entry["id"]] = {
+                    "url": entry["baseUrl"],
+                    "filename": sanitize(
+                        entry["id"] + "." + entry["mimeType"].split("/")[1]
+                    ),
+                    "type": entry["mimeType"],
+                    "metadata": entry["mediaMetadata"],
+                    "last_checked_at": int(time()),
+                    "downloaded": downloaded,
+                }
 
         progress_tracker.next()  # tick progress tracker
 

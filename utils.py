@@ -25,9 +25,7 @@ class google:
             auth["https://www.googleapis.com/auth/this.is.a.scope"]["expires_at"]: UNIX timestamp for when the access_token for the given scope expires
     """
 
-    def __init__(
-        self, debug=False, auth_file="auth.json"
-    ) -> None:
+    def __init__(self, debug=False, auth_file="auth.json") -> None:
         """
         Creates aiohttp client session for async web requests, and stores auth_file name
 
@@ -176,7 +174,7 @@ class google:
             print("Authed google account for scope " + scope + " " * 5)
 
     async def request(
-        self, endpoint:str, scope: str, method="get", data=None, params="", headers={}
+        self, endpoint: str, scope: str, method="get", data=None, params="", headers={}
     ) -> dict:
         """
         Make a request to a google api endpoint
@@ -223,18 +221,18 @@ class google:
                 timeout=aiohttp.ClientTimeout(6),
             )
 
-        resp_dict = await resp.json() # await the response dict
+        resp_dict = await resp.json()  # await the response dict
 
-        if resp.status == 200: # 200 -> successful response
-            return resp_dict # return the response's dict
+        if resp.status == 200:  # 200 -> successful response
+            return resp_dict  # return the response's dict
 
-        elif resp.status == 429: # 429 -> ratelimited
+        elif resp.status == 429:  # 429 -> ratelimited
             print(json.dumps(resp_dict, indent=3))
-            raise Exception("Ratelimited") # raise exception
-            
-        elif resp.status == 400: # 400 -> bad request
+            raise Exception("Ratelimited")  # raise exception
+
+        elif resp.status == 400:  # 400 -> bad request
             print(json.dumps(resp_dict, indent=3))
-            raise Exception("Invalid form body") # raise exception
+            raise Exception("Invalid form body")  # raise exception
         else:
             return resp.status
 
