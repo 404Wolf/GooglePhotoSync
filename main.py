@@ -68,13 +68,12 @@ async def load_data(lapse: int) -> None:
             try:
                 data = json.loads(data)
             except json.decoder.JSONDecodeError:
-                if data.keys() != ["media", "stats"]:
-                    if "data-backup.json" in os.listdir("output"):
-                        async with aiofiles.open("output/data-backup.json") as data:
-                            data = await data.read()
-                            data = json.loads(data)
-                else:
-                    data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
+                async with aiofiles.open("output/data-backup.json") as data:
+                    data = await data.read()
+                    data = json.loads(data)
+            
+            if data.keys() != ["stats", "media"]:
+                data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
 
         # gather up-to-date data
         data = await fetch_library(client, data)
