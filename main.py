@@ -1,12 +1,11 @@
-from utils import google
+import utils
+import os
 import asyncio
 import sys
 import json
 from time import time, mktime
 import ciso8601 as datetime
-import progress
 from time import sleep
-from os import listdir, mkdir
 import aiofiles
 from sanitize_filename import sanitize
 
@@ -18,10 +17,9 @@ if sys.platform == "win32":
 with open("config.json") as config:
     config = json.load(config)
 
-root_directory = listdir()
-
-if "auth.json" not in root_directory:
-    with open("auth.json", "w") as auth:
+# if first run, an auth file will need to be created
+if "auth.json" not in os.listdir("utils"):
+    with open("utils/auth.json", "w") as auth:
         json.dump(
             {
                 "appdata": {
@@ -35,10 +33,11 @@ if "auth.json" not in root_directory:
         )
 
 # if folder layout isn't setup, assume fresh install and setup
-if "output" not in root_directory:
-    mkdir("output")
-    mkdir("output/media")
-    open("output/data.json", "w").write("{}")
+if "output" not in os.listdir():
+    os.mkdir("output")
+    os.mkdir("output/media")
+    with open("output/data.json", "w") as data:
+        data.write("{}")
 
 
 async def load_data(lapse: int) -> None:
@@ -58,26 +57,24 @@ async def load_data(lapse: int) -> None:
     # load the data from file, or refresh if outdated
     try:
         # create google client object and auth for google photos
-        client = google(
-            auth_file="auth.json", open_in_browser=config["open_browser_to_auth"]
+        client = utils.google(
+            auth_file="utils/auth.json", open_in_browser=config["open_browser_to_auth"]
         )
         await client.auth("photoslibrary.readonly")
 
         # load data from data file; or from backup if main data file is corrupted
-        try:
-            async with aiofiles.open("output/data.json") as data:
-                data = json.loads(await data.read())
-                if ("stats" not in data) or ("media" not in data):
-                    raise Exception
-        except:
+        async with aiofiles.open("output/data.json") as data:
+            data = await data.read()
             try:
-                async with aiofiles.open("output/data-backup.json") as data:
-                    data = json.loads(await data.read())
-                    if ("stats" not in data) or ("media" not in data):
-                        raise Exception
-
-            except:
-                data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
+                data = json.loads(data)
+            except json.decoder.JSONDecodeError:
+                if data.keys() != ["media", "stats"]:
+                    if "data-backup.json" in os.listdir("output"):
+                        async with aiofiles.open("output/data-backup.json") as data:
+                            data = await data.read()
+                            data = json.loads(data)
+                else:
+                    data = {"stats": {"last_check": {"finished_check_at": 0}}, "media": {}}
 
         # gather up-to-date data
         data = await fetch_library(client, data)
@@ -120,7 +117,9 @@ async def download_library(client, data: dict) -> dict:
         client: google_api client object
         data: data in the structure as outputted to data.json example: {"stats":{<stat-data>,"media":{<media-type-1>:{<photo-data>}}}
     """
-    progress_tracker = progress.bar("Downloading media... ", total=len(data["media"]))
+    progress_tracker = utils.progress.bar(
+        "Downloading media... ", total=len(data["media"])
+    )
 
     async def current_download_data(data):
         """Yields current baseurl for photo to download."""
@@ -178,12 +177,11 @@ async def fetch_library(client, data: dict) -> dict:
     Returns:
         None
     """
-
     # record start UNIX time
     start = time()
 
     # progress spinner
-    progress_tracker = progress.spinner("Fetching media... ")
+    progress_tracker = utils.progress.spinner("Fetching media... ")
 
     # emtpy dict for data google will send back
     response_data = {"nextPageToken": ""}
@@ -214,7 +212,6 @@ async def fetch_library(client, data: dict) -> dict:
 
         if "mediaItems" in response_data:
             for entry in response_data["mediaItems"]:
-
                 # convert timestring to timestamp
                 entry["mediaMetadata"]["creationTime"] = datetime.parse_datetime(
                     entry["mediaMetadata"]["creationTime"]
@@ -224,22 +221,48 @@ async def fetch_library(client, data: dict) -> dict:
                     mktime(entry["mediaMetadata"]["creationTime"].timetuple())
                 )
 
-                # convert image size values to integers
-                entry["mediaMetadata"]["width"] = int(entry["mediaMetadata"]["width"])
-                entry["mediaMetadata"]["height"] = int(entry["mediaMetadata"]["height"])
+                # convert size values to integers
+                if ("height" in entry["mediaMetadata"]) and (
+                    "width" in entry["mediaMetadata"]
+                ):
+                    entry["mediaMetadata"]["width"] = int(
+                        entry["mediaMetadata"]["width"]
+                    )
+                    entry["mediaMetadata"]["height"] = int(
+                        entry["mediaMetadata"]["height"]
+                    )
 
-                try:
+                # set video status to bool
+                if "video" in entry["mediaMetadata"]:
+                    try:
+                        entry["mediaMetadata"]["video"]["status"] = (
+                            entry["mediaMetadata"]["video"]["status"] == "READY"
+                        )  # change status to bool
+                        entry["mediaMetadata"]["video"]["fps"] = round(
+                            entry["mediaMetadata"]["video"]["fps"], 2
+                        )  # round fps
+                    except KeyError:
+                        entry["mediaMetadata"]["video"][
+                            "status"
+                        ] = None  # otherwise set status to null
+
+                # flag as downloaded if already flagged as downloaded, otherwise flag as not downloaded
+                if (entry["id"] in data) and (
+                    "downloaded" in data["media"][entry["id"]]
+                ):
                     downloaded = data["media"][entry["id"]]["downloaded"]
-                except:
+                else:
                     downloaded = False
+
+                # split mimetype to array
+                entry["mimeType"] = entry["mimeType"].split("/")
 
                 # only keep needed data when dumping to output
                 data["media"][entry["id"]] = {
                     "url": entry["baseUrl"],
-                    "filename": sanitize(
-                        entry["id"] + "." + entry["mimeType"].split("/")[1]
-                    ),
-                    "type": entry["mimeType"],
+                    "filename": sanitize(entry["id"] + "." + entry["mimeType"][1]),
+                    "type": entry["mimeType"][0],
+                    "extension": entry["mimeType"][1],
                     "metadata": entry["mediaMetadata"],
                     "last_checked_at": int(time()),
                     "downloaded": downloaded,
@@ -256,11 +279,11 @@ async def fetch_library(client, data: dict) -> dict:
     # create output dict to dump to file
     data["stats"] = {
         "last_check": {
-            "started_check_at": round(start),
-            "finished_check_at": round(end),
-            "time_taken": round(end - start),
+            "started_check_at": round(start, 3),
+            "finished_check_at": round(end, 3),
+            "time_taken": round(end - start, 3),
         },
-        "items_found": len(data),
+        "items_found": len(data["media"]),
     }
 
     return data
